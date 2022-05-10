@@ -26,6 +26,7 @@ class Constants:
     STATE_DIM = 24
     ACTION_DIM = 2
     NUM_AGENTS = 2
+    BATCH_SIZE = 256
 
 # actor model network
 class Actor(nn.Module):
@@ -174,6 +175,8 @@ class DDPG():
                               (1 - Constants.TAU) * target.data)
         
         class MADDPGAgent():
-            def __init__(self, idx):
-                self.idx = idx
-                self.steps = 0                
+            def __init__(self):
+                #self.idx = idx
+                self.steps = 0  
+                
+                              
