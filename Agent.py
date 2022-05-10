@@ -5,7 +5,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from Noise import Noise
 import model
+import ExperienceReplay
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -38,7 +40,7 @@ class Agent():
         self.agents = [DDPG(i, models[i]) for i in range(n_agents)]
         
         # create shared replay buffer
-        self.memory = ReplayBuffer(action_size, self.buffer_size, self.batch_size, seed)
+        self.memory = ExperienceReplay(action_size, self.buffer_size, self.batch_size, seed)
 
     def step(self, all_states, all_actions, all_rewards, all_next_states, all_dones):
         all_states = all_states.reshape(1, -1) 
@@ -123,22 +125,21 @@ class DDPG():
         self.hard_copy_weights(self.critic_target, self.critic_local)
         
         # Noise process
-        self.noise = OUNoise(action_size, seed)
+        self.noise = Noise(action_size, seed)
 
     def hard_copy_weights(self, target, source):
         for target_param, param in zip(target.parameters(), source.parameters()):
             target_param.data.copy_(param.data)
     
-    def act(self, state, noise_weight=1.0, add_noise=True):
+    def act(self, state, noise_weight=1.0):
         state = torch.from_numpy(state).float().to(device)
         # calculate action values
         self.actor_local.eval()
         with torch.no_grad():
             action = self.actor_local(state).cpu().data.numpy()
-        self.actor_local.train()
-        if add_noise:
-            self.noise_val = self.noise.sample() * noise_weight
-            action += self.noise_val
+        self.actor_local.train()        
+        self.noise_val = self.noise.sample() * noise_weight
+        action += self.noise_val
         return np.clip(action, -1, 1)
 
     def reset(self):
@@ -178,51 +179,3 @@ class DDPG():
     def soft_update(self, local_model, target_model, tau):
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
-
-
-class OUNoise:
-
-    def __init__(self, size, seed, mu=0., theta=0.15, sigma=0.2):
-        random.seed(seed)
-        np.random.seed(seed)
-        self.size = size
-        self.mu = mu * np.ones(size)
-        self.theta = theta
-        self.sigma = sigma
-        self.reset()
-
-    def reset(self):
-        self.state = copy.copy(self.mu)
-
-    def sample(self):
-        x = self.state
-        dx = self.theta * (self.mu - x) + self.sigma * np.random.randn(self.size)
-        self.state = x + dx
-        return self.state
-
-
-class ReplayBuffer():
-
-    def __init__(self, action_size, buffer_size, batch_size, seed):
-        random.seed(seed)
-        np.random.seed(seed)
-        self.action_size = action_size
-        self.memory = deque(maxlen=buffer_size)
-        self.batch_size = batch_size
-        self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done"])
-
-
-    def add(self, state, action, reward, next_state, done):
-        self.memory.append( self.experience(state, action, reward, next_state, done)
-        
-    def sample(self):
-        experiences = random.sample(self.memory, k=self.batch_size)
-        states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).float().to(device)
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
-        return (states, actions, rewards, next_states, dones)
-
-    def __len__(self):
-        return len(self.memory)
