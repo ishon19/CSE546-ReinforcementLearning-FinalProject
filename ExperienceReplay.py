@@ -3,7 +3,7 @@ import random
 import numpy as np
 import torch
 
-DEVICE = torch.DEVICE("cuda:0" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class ReplayBuffer():
 
