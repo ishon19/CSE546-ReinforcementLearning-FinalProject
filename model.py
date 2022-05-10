@@ -105,4 +105,5 @@ class Actor_Critic_Models():
         self.actor_target = ActorModel(state_size, action_size, seed).to(device)
         critic_input_size = (state_size+action_size)*n_agents
         self.critic_local = CriticModel(critic_input_size, seed).to(device)
-        self.critic_target = CriticModel(critic_input_size, seed).to(device)
+        self.critic_target = CriticModel(critic_input_size, seed).to(device)    
+
