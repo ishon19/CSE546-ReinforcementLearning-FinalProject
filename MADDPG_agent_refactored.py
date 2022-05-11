@@ -2,7 +2,8 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
-import random, copy
+import random
+import copy
 
 
 class Constants:
@@ -29,20 +30,24 @@ class Constants:
     NUM_AGENTS = 2
     BATCH_SIZE = 256
 
-class Noise:
-  def __init__(self, size, seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    self.mu = Constants.MU * np.ones(size)
-    self.state = copy.copy(self.mu)
 
-  def sample(self):
-    x = self.state
-    dx = Constants.NOISE_THETA * (self.mu - x) + Constants.NOISE_SIGMA * np.random.randn(self.size)
-    self.state = x + dx
-    return self.state
+class Noise:
+    def __init__(self, size, seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        self.mu = Constants.MU * np.ones(size)
+        self.state = copy.copy(self.mu)
+
+    def sample(self):
+        x = self.state
+        dx = Constants.NOISE_THETA * \
+            (self.mu - x) + Constants.NOISE_SIGMA * np.random.randn(self.size)
+        self.state = x + dx
+        return self.state
 
 # actor model network
+
+
 class Actor(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(Actor, self).__init__()
@@ -93,13 +98,17 @@ class Critic(nn.Module):
 class ActorCritic(nn.Module):
     def __init__(self):
         # actor pair
-        self.ac_actor_local = Actor(Constants.STATE_DIM, Constants.ACTION_DIM).to(Constants.DEVICE)
-        self.ac_actor_target = Actor(Constants.STATE_DIM, Constants.ACTION_DIM).to(Constants.DEVICE)
-        input_size = (Constants.STATE_DIM + Constants.ACTION_DIM) * Constants.NUM_AGENTS
+        self.ac_actor_local = Actor(
+            Constants.STATE_DIM, Constants.ACTION_DIM).to(Constants.DEVICE)
+        self.ac_actor_target = Actor(
+            Constants.STATE_DIM, Constants.ACTION_DIM).to(Constants.DEVICE)
+        input_size = (Constants.STATE_DIM +
+                      Constants.ACTION_DIM) * Constants.NUM_AGENTS
 
         # critic pair
         self.ac_critic_local = Critic(input_size).to(Constants.DEVICE)
         self.ac_critic_target = Critic(input_size).to(Constants.DEVICE)
+
 
 class DDPG():
     def __init__(self, idx):
@@ -187,10 +196,11 @@ class DDPG():
         for target, local in zip(self.actor_target.parameters(), self.actor_local.parameters()):
             target.data.copy_(Constants.TAU * local.data +
                               (1 - Constants.TAU) * target.data)
-        
+
         class MADDPGAgent():
             def __init__(self):
-                #self.idx = idx
-                self.steps = 0  
-
-
+                np.random.seed(Constants.SEED)
+                random.seed(Constants.SEED)
+                self.steps = 0
+                model_list = [ActorCritic()] * Constants.NUM_AGENTS
+                agent_list = [DDPG(i) for i in range(Constants.NUM_AGENTS)]
