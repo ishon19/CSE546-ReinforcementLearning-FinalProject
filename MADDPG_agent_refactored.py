@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
+import random, copy
 
 
 class Constants:
@@ -27,6 +28,19 @@ class Constants:
     ACTION_DIM = 2
     NUM_AGENTS = 2
     BATCH_SIZE = 256
+
+class Noise:
+  def __init__(self, size, seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    self.mu = Constants.MU * np.ones(size)
+    self.state = copy.copy(self.mu)
+
+  def sample(self):
+    x = self.state
+    dx = Constants.NOISE_THETA * (self.mu - x) + Constants.NOISE_SIGMA * np.random.randn(self.size)
+    self.state = x + dx
+    return self.state
 
 # actor model network
 class Actor(nn.Module):
@@ -178,5 +192,5 @@ class DDPG():
             def __init__(self):
                 #self.idx = idx
                 self.steps = 0  
-                
-                              
+
+
