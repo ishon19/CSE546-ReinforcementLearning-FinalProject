@@ -1,3 +1,4 @@
+from collections import deque, namedtuple
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -22,28 +23,14 @@ class Constants:
     ACTION_DIM = 2
     BUFFER_SIZE = 10000
     UPDATE_INTERVAL = 2
-    NOISE1 = 0.1
+    NOISE1 = 1.0
     NOISE2 = 0.1
     NOISE3 = 30000
     STATE_DIM = 24
     ACTION_DIM = 2
     NUM_AGENTS = 2
     BATCH_SIZE = 256
-
-
-class Noise:
-    def __init__(self, size, seed):
-        random.seed(seed)
-        np.random.seed(seed)
-        self.mu = Constants.MU * np.ones(size)
-        self.state = copy.copy(self.mu)
-
-    def sample(self):
-        x = self.state
-        dx = Constants.NOISE_THETA * \
-            (self.mu - x) + Constants.NOISE_SIGMA * np.random.randn(self.size)
-        self.state = x + dx
-        return self.state
+    MU = 0.0
 
 # actor model network
 
@@ -112,6 +99,7 @@ class ActorCritic(nn.Module):
 
 class DDPG():
     def __init__(self, idx):
+        self.mu = np.ones(Constants.ACTION_DIM) * Constants.MU
         self.idx = idx
         # the actor models
         self.actor_local = Actor(Constants.ACTION_DIM,
@@ -129,6 +117,9 @@ class DDPG():
         self.critic_optimizer = torch.optim.Adam(
             self.critic_local.parameters(), lr=Constants.ALPHA_CRITIC)
 
+        # noise generator
+        self.noise_state = copy.copy(Constants.MU)
+
         # copy the weights from the local to the target
         # critic
         for target, local in zip(self.critic_target.parameters(), self.critic_local.parameters()):
@@ -137,6 +128,12 @@ class DDPG():
         # actor
         for target, local in zip(self.actor_target.parameters(), self.actor_local.parameters()):
             target.data.copy_(local.data)
+
+    def sample_noise(self):
+        x, dx = self.noise_state, Constants.NOISE_THETA * \
+            (self.mu - x) + Constants.NOISE_SIGMA * np.random.randn(self.size)
+        self.noise_state = x + dx
+        return self.noise_state
 
     def _transform_state(self, state):
         state_trans = torch.from_numpy(state).float().to(Constants.DEVICE)
@@ -148,6 +145,7 @@ class DDPG():
         with torch.no_grad():
             action = self.actor_local(state).cpu().data.numpy()
         self.actor_local.train()
+        self.val_noise = self.sample_noise() * Constants.NOISE1
         return np.clip(action, -1, 1)
 
     def _get_idx_actions(self, idx, actions_next):
@@ -160,10 +158,10 @@ class DDPG():
             1, idx) + Constants.GAMMA * target_q_next * (1 - d.index_select(1, idx))
         return exp_q, tar_q
 
-    def _get_expected_actions_loss(self, s,  a, actions):
+    def _get_expected_loss(self, s,  a, actions):
         pred = [a.detach() if i != self.idx else a for i, a in actions]
         pred = torch.cat(pred, dim=1)
-        return -self.critic_local(s, pred).mean(), pred
+        return -self.critic_local(s, pred).mean()
 
     def update(self, idx, experiences, actions_next, actions):
         # get the states, actions, rewards, and don'ts from the experiences
@@ -184,8 +182,7 @@ class DDPG():
 
         # compute the actor loss
         self.actor_optimizer.zero_grad()
-        exp_actions, loss_actor = self._get_expected_actions_loss(
-            s, a, actions)
+        loss_actor = self._get_expected_loss(s, a, actions)
         loss_actor.backward()
         self.actor_optimizer.step()
 
@@ -197,10 +194,70 @@ class DDPG():
             target.data.copy_(Constants.TAU * local.data +
                               (1 - Constants.TAU) * target.data)
 
-        class MADDPGAgent():
-            def __init__(self):
-                np.random.seed(Constants.SEED)
-                random.seed(Constants.SEED)
-                self.steps = 0
-                model_list = [ActorCritic()] * Constants.NUM_AGENTS
-                agent_list = [DDPG(i) for i in range(Constants.NUM_AGENTS)]
+class MADDPGAgent():
+    def __init__(self):
+        np.random.seed(Constants.SEED)
+        random.seed(Constants.SEED)
+        self.steps = 0
+        model_list = [ActorCritic()] * Constants.NUM_AGENTS
+        agent_list = [DDPG(i) for i in range(Constants.NUM_AGENTS)]
+        self.experience = namedtuple("ReplayBuffer", field_names=[
+                                        "s", "a", "r", "n", "d"])
+        self.memory = deque(maxlen=Constants.BUFFER_SIZE)
+
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append(self.experience(
+            state, action, reward, next_state, done))
+
+    def _to_tensor(self, obj):
+        return torch.from_numpy(obj).float().to(Constants.DEVICE).float().to(Constants.DEVICE)
+
+    def sampleMemory(self):
+        memory_sample = random.sample(
+            self.memory, Constants.BATCH_SIZE)
+        s, a = self._to_tensor(
+            np.vstack([e.s for e in memory_sample if e is not None])),
+        self._to_tensor(
+            np.vstack([e.a for e in memory_sample if e is not None]))
+        r, n = self._to_tensor(
+            np.vstack([e.r for e in memory_sample if e is not None])),
+        self._to_tensor(
+            np.vstack([e.n for e in memory_sample if e is not None]))
+        d = self._to_tensor(
+            np.vstack([e.d for e in memory_sample if e is not None]))
+        return (s, a, r, n, d)
+    
+    def step(self, params):
+        state, action, reward, next_state, done = params
+        state = state.reshape((1, -1))
+        next_state = next_state.reshape((1, -1))
+        self.remember(state, action, reward, next_state, done)
+        self.steps += 1
+        if self.steps % Constants.UPDATE_INTERVAL == 0:
+            if len(self.memory) > Constants.BATCH_SIZE:
+                exps = [self.sampleMemory() for _ in range(Constants.NUM_AGENTS)]
+                self.update(exps)
+    
+    def action(self, states):
+        act_list = []
+        for a,s  in zip(self.agent_list, states):
+            action = a.action(s)
+            act_list.append(action)
+        return np.array(act_list).reshape((-1, 1))
+    
+    def update(self, exps):
+        next_act_list, act_list = [], []
+        for i, a in enumerate(self.agent_list):
+            s, a, r, n, d = exps[i]
+            a_idx = torch.tensor([i]).to(Constants.DEVICE)
+            state = s.reshape(1, 2, 24).index_select(1, a_idx).squeeze(1)
+            action = a.actor_local(state)
+            act_list.append(action) 
+            next_state = n.reshape(1, 2, 24).index_select(1, a_idx).squeeze(1)
+            next_action = a.actor_target(next_state)
+            next_act_list.append(next_action)
+        
+        for i, a in enumerate(self.agent_list):
+            a.update((s, a, r, n, d))
+
+
